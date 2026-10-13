@@ -1,0 +1,23 @@
+services:
+  code-share:
+    build: .
+    image: code-share:latest
+    container_name: code-share
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # URL pública (sin "/" final). Si se deja vacía se usa el host de la petición.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # Ponlo en "true" si corre detrás de un proxy inverso (nginx, Caddy, Traefik…).
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      TTL_HOURS: ${TTL_HOURS:-24}
+      MAX_FILES: ${MAX_FILES:-100}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
+      MAX_TOTAL_SIZE_MB: ${MAX_TOTAL_SIZE_MB:-50}
+      UPLOADS_PER_HOUR: ${UPLOADS_PER_HOUR:-30}
+    volumes:
+      - code-share-data:/data
+
+volumes:
+  code-share-data:

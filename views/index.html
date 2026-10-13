@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codeshare — comparte código en un link</title>
+  <meta name="description" content="Sube archivos de código y compártelos con un link corto. Se eliminan en 24 horas.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/upload.js"></script>
+</head>
+<body>
+  <header class="top">
+    <a class="logo" href="/"><span class="logo-mark">{}</span>codeshare</a>
+    <span class="spacer"></span>
+    <span class="chip">sin cuenta · 24 h</span>
+  </header>
+
+  <main class="home">
+    <section id="compose">
+      <h1>Comparte código en un link.</h1>
+      <p class="lead">Sube archivos o carpetas completas y comparte un link corto. Todo se elimina automáticamente en <span data-ttl>24 horas</span>.</p>
+
+      <div class="drop" id="drop">
+        <div class="drop-icon" data-icon="upload"></div>
+        <p class="drop-title">Arrastra archivos o carpetas aquí</p>
+        <p class="drop-sub">o <button type="button" class="link-btn" id="pick-files">elige archivos</button> · <button type="button" class="link-btn" id="pick-folder">una carpeta</button></p>
+        <input type="file" id="file-input" multiple hidden>
+        <input type="file" id="folder-input" webkitdirectory multiple hidden>
+      </div>
+
+      <div class="paste-toggle">
+        <button type="button" class="link-btn" id="paste-open">Pegar código</button>
+      </div>
+
+      <div class="paste" id="paste" hidden>
+        <input id="paste-name" placeholder="nombre-del-archivo.js" autocomplete="off" spellcheck="false">
+        <textarea id="paste-body" placeholder="Pega tu código aquí…" spellcheck="false"></textarea>
+        <div class="paste-actions">
+          <button type="button" class="btn btn-ghost" id="paste-cancel">Cancelar</button>
+          <button type="button" class="btn" id="paste-add">Añadir archivo</button>
+        </div>
+      </div>
+
+      <ul class="staged" id="staged" hidden></ul>
+
+      <div class="progress" id="progress" hidden><div></div></div>
+      <p class="error" id="error" hidden></p>
+
+      <div class="actions">
+        <span class="summary" id="summary"></span>
+        <button type="button" class="btn btn-primary" id="share" disabled>Crear link</button>
+      </div>
+    </section>
+
+    <section class="result" id="result" hidden>
+      <div class="result-check" data-icon="check"></div>
+      <h2>Tu link está listo</h2>
+      <p id="result-meta"></p>
+      <div class="linkbox">
+        <a id="result-link" href="#"></a>
+        <button type="button" class="btn" id="result-copy"><span data-icon="copy"></span>Copiar</button>
+      </div>
+      <button type="button" class="link-btn" id="again">Compartir otros archivos</button>
+    </section>
+
+    <section class="recent" id="recent" hidden>
+      <h3>Tus links recientes</h3>
+      <ul></ul>
+    </section>
+  </main>
+
+  <footer class="foot">Sin cuentas. Los proyectos se eliminan para siempre <span data-ttl>24 horas</span> después de subirlos.</footer>
+</body>
+</html>

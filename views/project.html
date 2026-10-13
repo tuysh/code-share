@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codeshare</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/vendor/hljs/highlight.min.js" defer></script>
+  <script src="/vendor/hljs/languages/dockerfile.min.js" defer></script>
+  <script src="/vendor/hljs/languages/powershell.min.js" defer></script>
+  <script src="/vendor/hljs/languages/dart.min.js" defer></script>
+  <script src="/vendor/hljs/languages/scala.min.js" defer></script>
+  <script src="/vendor/hljs/languages/nginx.min.js" defer></script>
+  <script src="/vendor/hljs/languages/protobuf.min.js" defer></script>
+  <script src="/vendor/hljs/languages/elixir.min.js" defer></script>
+  <script src="/vendor/hljs/languages/haskell.min.js" defer></script>
+  <script type="module" src="/assets/project.js"></script>
+</head>
+<body class="viewer-page">
+  <header class="top">
+    <a class="logo" href="/"><span class="logo-mark">{}</span><span class="hide-sm">codeshare</span></a>
+    <span class="chip" id="pid" hidden></span>
+    <span class="chip hide-sm" id="expires" hidden></span>
+    <span class="spacer"></span>
+    <button type="button" class="btn btn-ghost btn-icon tree-toggle" id="tree-toggle" aria-label="Mostrar archivos" hidden><span data-icon="menu"></span></button>
+    <button type="button" class="btn" id="copy-link" hidden><span data-icon="copy"></span><span class="hide-sm">Copiar link</span></button>
+    <a class="btn" id="zip" hidden><span data-icon="download"></span><span class="hide-sm">.zip</span></a>
+    <a class="btn btn-ghost" href="/"><span data-icon="plus"></span><span class="hide-sm">Nuevo</span></a>
+  </header>
+
+  <div class="project" id="project">
+    <aside class="tree" id="tree" hidden>
+      <div class="tree-head"><span>Archivos</span><span id="file-count"></span></div>
+      <ul id="tree-root"></ul>
+    </aside>
+
+    <section class="viewer" id="viewer">
+      <div class="notice" id="loading"><p>Cargando…</p></div>
+    </section>
+  </div>
+</body>
+</html>
