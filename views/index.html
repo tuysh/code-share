@@ -47,6 +47,14 @@
       <div class="progress" id="progress" hidden><div></div></div>
       <p class="error" id="error" hidden></p>
 
+      <div class="option-row">
+        <span class="option-label">Pueden editar</span>
+        <div class="segmented" id="edit-mode" role="radiogroup" aria-label="Quién puede editar">
+          <button type="button" role="radio" aria-checked="true" data-mode="owner"><span data-icon="lock"></span>Solo yo</button>
+          <button type="button" role="radio" aria-checked="false" data-mode="anyone"><span data-icon="users"></span>Cualquiera con el link</button>
+        </div>
+      </div>
+
       <div class="actions">
         <span class="summary" id="summary"></span>
         <button type="button" class="btn btn-primary" id="share" disabled>Crear link</button>
@@ -60,6 +68,14 @@
       <div class="linkbox">
         <a id="result-link" href="#"></a>
         <button type="button" class="btn" id="result-copy"><span data-icon="copy"></span>Copiar</button>
+      </div>
+      <div class="private-link">
+        <div class="private-head"><span data-icon="lock"></span><b id="edit-title">Link privado de edición</b></div>
+        <div class="linkbox linkbox-sm">
+          <span id="edit-link"></span>
+          <button type="button" class="btn" id="edit-copy"><span data-icon="copy"></span>Copiar</button>
+        </div>
+        <p class="hint" id="edit-hint"></p>
       </div>
       <button type="button" class="link-btn" id="again">Compartir otros archivos</button>
     </section>

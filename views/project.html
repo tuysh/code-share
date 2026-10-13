@@ -23,22 +23,64 @@
     <a class="logo" href="/"><span class="logo-mark">{}</span><span class="hide-sm">codeshare</span></a>
     <span class="chip" id="pid" hidden></span>
     <span class="chip hide-sm" id="expires" hidden></span>
+    <span class="chip chip-accent hide-sm" id="mode-chip" hidden></span>
     <span class="spacer"></span>
     <button type="button" class="btn btn-ghost btn-icon tree-toggle" id="tree-toggle" aria-label="Mostrar archivos" hidden><span data-icon="menu"></span></button>
     <button type="button" class="btn" id="copy-link" hidden><span data-icon="copy"></span><span class="hide-sm">Copiar link</span></button>
     <a class="btn" id="zip" hidden><span data-icon="download"></span><span class="hide-sm">.zip</span></a>
+    <button type="button" class="btn" id="open-settings" hidden><span data-icon="settings"></span><span class="hide-sm">Ajustes</span></button>
     <a class="btn btn-ghost" href="/"><span data-icon="plus"></span><span class="hide-sm">Nuevo</span></a>
   </header>
 
   <div class="project" id="project">
     <aside class="tree" id="tree" hidden>
-      <div class="tree-head"><span>Archivos</span><span id="file-count"></span></div>
+      <div class="tree-head">
+        <span>Archivos <span class="tree-count" id="file-count"></span></span>
+        <span class="tree-actions" id="tree-actions" hidden>
+          <button type="button" class="btn btn-ghost btn-icon btn-xs" id="new-file" title="Nuevo archivo" aria-label="Nuevo archivo"><span data-icon="filePlus"></span></button>
+          <button type="button" class="btn btn-ghost btn-icon btn-xs" id="upload-files" title="Subir archivos" aria-label="Subir archivos"><span data-icon="upload"></span></button>
+        </span>
+      </div>
       <ul id="tree-root"></ul>
+      <p class="tree-hint" id="tree-hint" hidden>Arrastra archivos aquí para añadirlos</p>
+      <input type="file" id="upload-input" multiple hidden>
     </aside>
 
     <section class="viewer" id="viewer">
       <div class="notice" id="loading"><p>Cargando…</p></div>
     </section>
   </div>
+
+  <div class="drop-overlay" id="drop-overlay" hidden>
+    <div><span data-icon="upload"></span><p>Suelta para añadir al proyecto</p></div>
+  </div>
+
+  <dialog class="modal" id="settings">
+    <form method="dialog">
+      <h2>Ajustes del proyecto</h2>
+
+      <label class="switch-row">
+        <span>
+          <b>Cualquiera con el link puede editar</b>
+          <small>Si lo apagas, solo tú (con tu link privado) puedes editar.</small>
+        </span>
+        <input type="checkbox" class="switch" id="mode-toggle">
+      </label>
+
+      <div class="field">
+        <span class="field-label">Tu link privado de edición</span>
+        <div class="linkbox linkbox-sm">
+          <span id="settings-edit-link"></span>
+          <button type="button" class="btn" id="settings-edit-copy"><span data-icon="copy"></span>Copiar</button>
+        </div>
+        <small class="hint">Ábrelo en otro dispositivo para editar desde ahí. No lo compartas.</small>
+      </div>
+
+      <div class="modal-actions spread">
+        <button type="button" class="btn btn-danger-ghost" id="delete-project"><span data-icon="trash"></span>Eliminar proyecto</button>
+        <button class="btn btn-dark" value="close">Listo</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

@@ -19,6 +19,7 @@ export function loadConfig(env = process.env) {
     maxFileSize: int(env.MAX_FILE_SIZE_MB, 10) * MB,
     maxTotalSize: int(env.MAX_TOTAL_SIZE_MB, 50) * MB,
     uploadsPerHour: int(env.UPLOADS_PER_HOUR, 30),
+    editsPerHour: int(env.EDITS_PER_HOUR, 600),
     sweepIntervalMs: int(env.SWEEP_INTERVAL_SECONDS, 60) * 1000,
     trustProxy: env.TRUST_PROXY === 'true' || env.TRUST_PROXY === '1',
   };

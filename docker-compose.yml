@@ -16,6 +16,7 @@ services:
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
       MAX_TOTAL_SIZE_MB: ${MAX_TOTAL_SIZE_MB:-50}
       UPLOADS_PER_HOUR: ${UPLOADS_PER_HOUR:-30}
+      EDITS_PER_HOUR: ${EDITS_PER_HOUR:-600}
     volumes:
       - code-share-data:/data
 

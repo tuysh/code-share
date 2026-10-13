@@ -7,6 +7,7 @@ import express from 'express';
 import multer from 'multer';
 import archiver from 'archiver';
 import { ID_RE } from './store.js';
+import { HttpError } from './errors.js';
 import { sanitizePath, uniquePath, decodeFilename } from './paths.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -34,14 +35,9 @@ const PAGE_CSP = [
   "object-src 'none'",
 ].join('; ');
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
+const mb = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
 
-function rateLimiter({ perHour }) {
+function rateLimiter({ perHour, message }) {
   const hits = new Map();
   const timer = setInterval(() => {
     const now = Date.now();
@@ -58,7 +54,7 @@ function rateLimiter({ perHour }) {
     }
     if (++entry.count > perHour) {
       res.set('Retry-After', String(Math.ceil((entry.reset - now) / 1000)));
-      return next(new HttpError(429, 'Demasiadas subidas. Intenta de nuevo más tarde.'));
+      return next(new HttpError(429, message));
     }
     next();
   };
@@ -69,15 +65,7 @@ function contentDisposition(type, filename) {
   return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }
 
-function publicMeta(meta, baseUrl) {
-  return {
-    id: meta.id,
-    url: `${baseUrl}/${meta.id}`,
-    createdAt: meta.createdAt,
-    expiresAt: meta.expiresAt,
-    files: meta.files.map((f, index) => ({ index, ...f })),
-  };
-}
+const editToken = (req) => req.get('x-edit-token') || '';
 
 export function createApp(config, store) {
   const app = express();
@@ -85,6 +73,27 @@ export function createApp(config, store) {
   if (config.trustProxy) app.set('trust proxy', true);
 
   const baseUrl = (req) => config.publicUrl || `${req.protocol}://${req.get('host')}`;
+
+  const publicMeta = (meta, req, token = editToken(req)) => {
+    return {
+      id: meta.id,
+      url: `${baseUrl(req)}/${meta.id}`,
+      createdAt: meta.createdAt,
+      expiresAt: meta.expiresAt,
+      rev: meta.rev,
+      editMode: meta.editMode,
+      canEdit: store.canEdit(meta, token),
+      isOwner: store.isOwner(meta, token),
+      files: meta.files.map(({ id, path: p, size, binary, version, updatedAt }) => ({
+        id,
+        path: p,
+        size,
+        binary,
+        version,
+        updatedAt,
+      })),
+    };
+  };
 
   app.use((req, res, next) => {
     res.set({
@@ -112,7 +121,7 @@ export function createApp(config, store) {
     });
   });
 
-  // ---- Upload -------------------------------------------------------------
+  // ---- Upload helpers -----------------------------------------------------
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -126,8 +135,6 @@ export function createApp(config, store) {
       fieldSize: 1024 * 1024,
     },
   });
-
-  const mb = (bytes) => `${Math.round(bytes / 1024 / 1024)} MB`;
 
   const handleUpload = (req, res, next) => {
     upload.array('files', config.maxFiles)(req, res, (err) => {
@@ -148,41 +155,59 @@ export function createApp(config, store) {
     });
   };
 
-  app.post('/api/projects', rateLimiter({ perHour: config.uploadsPerHour }), handleUpload, async (req, res, next) => {
+  /** Pairs each uploaded temp file with its sanitized relative path. */
+  const uploadedEntries = (req) => {
     const files = req.files || [];
-    const discard = () => Promise.all(files.map((f) => fs.rm(f.path, { force: true })));
+    if (!files.length) throw new HttpError(400, 'No se recibió ningún archivo.');
+
+    // Optional JSON array with the relative path of each file, in order.
+    // Browsers strip folders from multipart filenames, so the UI sends them here.
+    let manifest = [];
+    if (req.body?.manifest) {
+      try {
+        manifest = JSON.parse(req.body.manifest);
+      } catch {
+        throw new HttpError(400, 'Manifiesto inválido.');
+      }
+      if (!Array.isArray(manifest)) throw new HttpError(400, 'Manifiesto inválido.');
+    }
+
+    const taken = new Set();
+    return files.map((f, i) => {
+      const fallback = sanitizePath(decodeFilename(f.originalname), `archivo-${i + 1}.txt`);
+      const p = uniquePath(sanitizePath(manifest[i], fallback), taken);
+      taken.add(p);
+      return { tmpPath: f.path, path: p, size: f.size };
+    });
+  };
+
+  const discardUploads = (req) => Promise.all((req.files || []).map((f) => fs.rm(f.path, { force: true })));
+
+  // ---- Create -------------------------------------------------------------
+
+  const createLimit = rateLimiter({
+    perHour: config.uploadsPerHour,
+    message: 'Demasiadas subidas. Intenta de nuevo más tarde.',
+  });
+  const editLimit = rateLimiter({
+    perHour: config.editsPerHour,
+    message: 'Demasiadas ediciones. Intenta de nuevo más tarde.',
+  });
+
+  app.post('/api/projects', createLimit, handleUpload, async (req, res, next) => {
     try {
-      if (!files.length) throw new HttpError(400, 'No se recibió ningún archivo.');
-
-      const total = files.reduce((sum, f) => sum + f.size, 0);
-      if (total > config.maxTotalSize) {
-        throw new HttpError(413, `El proyecto puede pesar como máximo ${mb(config.maxTotalSize)}.`);
-      }
-
-      // Optional JSON array with the relative path of each file, in order.
-      // Browsers strip folders from multipart filenames, so the UI sends them here.
-      let manifest = [];
-      if (req.body?.manifest) {
-        try {
-          manifest = JSON.parse(req.body.manifest);
-        } catch {
-          throw new HttpError(400, 'Manifiesto inválido.');
-        }
-        if (!Array.isArray(manifest)) throw new HttpError(400, 'Manifiesto inválido.');
-      }
-
-      const taken = new Set();
-      const entries = files.map((f, i) => {
-        const fallback = sanitizePath(decodeFilename(f.originalname), `archivo-${i + 1}.txt`);
-        const p = uniquePath(sanitizePath(manifest[i], fallback), taken);
-        taken.add(p);
-        return { tmpPath: f.path, path: p, size: f.size };
+      const entries = uploadedEntries(req);
+      const editMode = req.body?.editMode === 'anyone' ? 'anyone' : 'owner';
+      const { meta, editToken: token } = await store.create(entries, { editMode });
+      const url = `${baseUrl(req)}/${meta.id}`;
+      // The key travels in the URL fragment, which browsers never send to the server.
+      res.status(201).json({
+        ...publicMeta(meta, req, token),
+        editToken: token,
+        editUrl: `${url}#key=${token}`,
       });
-
-      const meta = await store.create(entries);
-      res.status(201).json(publicMeta(meta, baseUrl(req)));
     } catch (err) {
-      await discard();
+      await discardUploads(req);
       next(err);
     }
   });
@@ -200,12 +225,12 @@ export function createApp(config, store) {
     }
   };
 
-  const sendFile = (req, res, n) => {
+  const sendFile = (req, res, file) => {
     const { meta } = res.locals;
-    const file = meta.files[n];
     const name = path.posix.basename(file.path);
     const image = IMAGE_TYPES[path.posix.extname(name).toLowerCase()];
     const download = req.query.download !== undefined;
+    const etag = `"${file.id}-${file.version}"`;
 
     let type = 'application/octet-stream';
     if (!file.binary) type = 'text/plain; charset=utf-8';
@@ -213,28 +238,29 @@ export function createApp(config, store) {
 
     res.set({
       'Content-Type': type,
-      'Content-Length': String(file.size),
       'Content-Disposition': contentDisposition(download ? 'attachment' : 'inline', name),
       'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
-      'Cache-Control': 'private, max-age=300',
+      // Files can be edited, so always revalidate.
+      'Cache-Control': 'no-cache',
+      ETag: etag,
     });
-    createReadStream(store.filePath(meta.id, n)).pipe(res);
+    if (req.get('if-none-match') === etag) return res.status(304).end();
+    res.set('Content-Length', String(file.size));
+    createReadStream(store.filePath(meta.id, file.id)).pipe(res);
   };
 
   app.get('/api/projects/:id', loadProject, (req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.json(publicMeta(res.locals.meta, baseUrl(req)));
+    res.json(publicMeta(res.locals.meta, req));
   });
 
-  app.get('/api/projects/:id/files/:n', loadProject, (req, res, next) => {
-    const n = Number(req.params.n);
-    if (!Number.isInteger(n) || !res.locals.meta.files[n]) {
-      return next(new HttpError(404, 'Archivo no encontrado.'));
-    }
-    sendFile(req, res, n);
+  app.get('/api/projects/:id/files/:fileId', loadProject, (req, res, next) => {
+    const file = res.locals.meta.files.find((f) => f.id === req.params.fileId);
+    if (!file) return next(new HttpError(404, 'Archivo no encontrado.'));
+    sendFile(req, res, file);
   });
 
-  app.get('/api/projects/:id/zip', loadProject, (req, res, next) => {
+  app.get('/api/projects/:id/zip', loadProject, (req, res) => {
     const { meta } = res.locals;
     res.set({
       'Content-Type': 'application/zip',
@@ -246,9 +272,87 @@ export function createApp(config, store) {
       res.destroy(err);
     });
     zip.pipe(res);
-    meta.files.forEach((f, n) => zip.file(store.filePath(meta.id, n), { name: f.path }));
+    for (const f of meta.files) zip.file(store.filePath(meta.id, f.id), { name: f.path });
     zip.finalize();
   });
+
+  // ---- Edit ---------------------------------------------------------------
+
+  const requireEdit = (req, res, next) => {
+    if (store.canEdit(res.locals.meta, editToken(req))) return next();
+    next(new HttpError(403, 'No tienes permiso para editar este proyecto.'));
+  };
+
+  const requireOwner = (req, res, next) => {
+    if (store.isOwner(res.locals.meta, editToken(req))) return next();
+    next(new HttpError(403, 'Solo quien creó el proyecto puede hacer esto.'));
+  };
+
+  // Load + authorize before multer touches the disk.
+  app.post('/api/projects/:id/files', editLimit, loadProject, requireEdit, handleUpload, async (req, res, next) => {
+    try {
+      const { meta, added } = await store.addFiles(req.params.id, uploadedEntries(req));
+      res.status(201).json({ ...publicMeta(meta, req), added: added.map((f) => f.id) });
+    } catch (err) {
+      await discardUploads(req);
+      next(err);
+    }
+  });
+
+  const rawBody = express.raw({ type: () => true, limit: config.maxFileSize });
+
+  app.put('/api/projects/:id/files/:fileId', editLimit, loadProject, requireEdit, rawBody, async (req, res, next) => {
+    try {
+      const content = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      // Version the editor started from; omit it to overwrite unconditionally.
+      const base = req.get('x-base-version');
+      const baseVersion = base && /^\d+$/.test(base) ? Number(base) : undefined;
+      const { meta } = await store.updateFile(req.params.id, req.params.fileId, content, baseVersion);
+      res.json(publicMeta(meta, req));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.patch('/api/projects/:id/files/:fileId', editLimit, loadProject, requireEdit, express.json(), async (req, res, next) => {
+    try {
+      const newPath = sanitizePath(req.body?.path, '');
+      if (!newPath) throw new HttpError(400, 'Nombre de archivo inválido.');
+      const { meta } = await store.renameFile(req.params.id, req.params.fileId, newPath);
+      res.json(publicMeta(meta, req));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete('/api/projects/:id/files/:fileId', editLimit, loadProject, requireEdit, async (req, res, next) => {
+    try {
+      const meta = await store.deleteFile(req.params.id, req.params.fileId);
+      res.json(publicMeta(meta, req));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.patch('/api/projects/:id', editLimit, loadProject, requireOwner, express.json(), async (req, res, next) => {
+    try {
+      const meta = await store.setEditMode(req.params.id, req.body?.editMode);
+      res.json(publicMeta(meta, req));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete('/api/projects/:id', loadProject, requireOwner, async (req, res, next) => {
+    try {
+      await store.withLock(req.params.id, () => store.remove(req.params.id));
+      res.status(204).end();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ---- Pages --------------------------------------------------------------
 
   // Short raw URLs, handy for curl: /<id>/raw/src/index.js
   app.get('/:id/raw/*filepath', (req, res, next) => {
@@ -256,9 +360,9 @@ export function createApp(config, store) {
     loadProject(req, res, (err) => {
       if (err) return next(err);
       const wanted = req.params.filepath.join('/');
-      const n = res.locals.meta.files.findIndex((f) => f.path === wanted);
-      if (n === -1) return next(new HttpError(404, 'Archivo no encontrado.'));
-      sendFile(req, res, n);
+      const file = res.locals.meta.files.find((f) => f.path === wanted);
+      if (!file) return next(new HttpError(404, 'Archivo no encontrado.'));
+      sendFile(req, res, file);
     });
   });
 
@@ -278,6 +382,11 @@ export function createApp(config, store) {
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
+    if (err.type === 'entity.too.large') {
+      err = new HttpError(413, `Cada archivo puede pesar como máximo ${mb(config.maxFileSize)}.`);
+    } else if (err.type === 'entity.parse.failed') {
+      err = new HttpError(400, 'Solicitud inválida.');
+    }
     const status = err.status || 500;
     if (status >= 500) console.error(err);
     const message = status >= 500 ? 'Error interno del servidor.' : err.message;

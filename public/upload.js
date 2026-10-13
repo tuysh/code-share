@@ -1,15 +1,15 @@
-import { icons, formatSize, timeLeft, escapeHtml, copyText, toast, shortUrl, loadRecent, saveRecent } from './common.js';
+import {
+  icons, formatSize, timeLeft, escapeHtml, copyText, toast, shortUrl, loadRecent, saveRecent,
+  skipped, droppedFiles, uploadForm, saveKey,
+} from './common.js';
 
 const $ = (sel) => document.querySelector(sel);
-
-// Folders that are almost never meant to be shared and quickly blow past the limits.
-const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '__pycache__', '.venv', 'venv', '.next', '.cache']);
-const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
 
 let limits = { ttlMs: 24 * 3600e3, maxFiles: 100, maxFileSize: 10 * 1024 * 1024, maxTotalSize: 50 * 1024 * 1024 };
 /** @type {{ file: Blob, path: string }[]} */
 let staged = [];
 let busy = false;
+let editMode = 'owner';
 
 for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = icons[el.dataset.icon];
 
@@ -24,11 +24,6 @@ fetch('/api/config')
   .catch(() => {});
 
 // ---------- staging ----------
-
-const skipped = (path) => {
-  const parts = path.split('/');
-  return SKIP_FILES.has(parts.at(-1)) || parts.slice(0, -1).some((p) => SKIP_DIRS.has(p));
-};
 
 function addFiles(items) {
   const existing = new Set(staged.map((s) => s.path));
@@ -86,22 +81,6 @@ for (const input of [$('#file-input'), $('#folder-input')]) {
 
 // ---------- drag & drop (with folder traversal) ----------
 
-const readEntries = (reader) => new Promise((resolve, reject) => reader.readEntries(resolve, reject));
-const entryFile = (entry) => new Promise((resolve, reject) => entry.file(resolve, reject));
-
-async function walk(entry, prefix, out) {
-  const path = prefix + entry.name;
-  if (entry.isFile) {
-    if (!skipped(path)) out.push({ file: await entryFile(entry), path });
-  } else if (entry.isDirectory && !SKIP_DIRS.has(entry.name)) {
-    const reader = entry.createReader();
-    // readEntries returns results in batches; keep reading until empty.
-    for (let batch = await readEntries(reader); batch.length; batch = await readEntries(reader)) {
-      for (const child of batch) await walk(child, `${path}/`, out);
-    }
-  }
-}
-
 const drop = $('#drop');
 let depth = 0;
 drop.addEventListener('dragenter', (e) => {
@@ -122,18 +101,11 @@ drop.addEventListener('drop', async (e) => {
   drop.classList.remove('over');
   if (busy) return;
 
-  const entries = [...e.dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
-  if (!entries.length) {
-    addFiles([...e.dataTransfer.files].map((f) => ({ file: f, path: f.name })));
-    return;
-  }
-  const out = [];
   try {
-    for (const entry of entries) await walk(entry, '', out);
+    addFiles(await droppedFiles(e.dataTransfer));
   } catch {
     showError('No se pudieron leer algunos archivos.');
   }
-  addFiles(out);
 });
 
 // Stop the browser from opening files dropped outside the zone.
@@ -191,9 +163,8 @@ $('#share').addEventListener('click', () => {
   const problem = validate();
   if (problem) return showError(problem);
 
-  const form = new FormData();
-  form.append('manifest', JSON.stringify(staged.map((s) => s.path)));
-  for (const s of staged) form.append('files', s.file, s.path.split('/').pop());
+  const form = uploadForm(staged);
+  form.append('editMode', editMode);
 
   busy = true;
   showError('');
@@ -229,9 +200,17 @@ function done(project) {
   render();
 
   saveRecent({ id: project.id, url: project.url, expiresAt: project.expiresAt, files: project.files.length });
+  saveKey(project.id, project.editToken, project.expiresAt);
   const link = $('#result-link');
   link.href = project.url;
   link.textContent = shortUrl(project.url);
+  editUrl = project.editUrl;
+  $('#edit-link').textContent = `${shortUrl(project.url)}#key=••••••`;
+  $('#edit-title').textContent = project.editMode === 'anyone' ? 'Link privado de administración' : 'Link privado de edición';
+  $('#edit-hint').textContent =
+    project.editMode === 'anyone'
+      ? 'Cualquiera con el link puede editar. Este otro link te permite además cambiar permisos y eliminar el proyecto. Guárdalo: no se puede recuperar.'
+      : 'Solo quien tenga este link puede editar, cambiar permisos o eliminar el proyecto. Guárdalo: no se puede recuperar.';
   const n = project.files.length;
   $('#result-meta').textContent = `${n} ${n === 1 ? 'archivo' : 'archivos'} · expira en ${timeLeft(project.expiresAt)}`;
   $('#compose').hidden = true;
@@ -239,9 +218,24 @@ function done(project) {
   renderRecent();
 }
 
+let editUrl = '';
+
 $('#result-copy').addEventListener('click', async () => {
   if (await copyText($('#result-link').href)) toast('Link copiado');
 });
+
+$('#edit-copy').addEventListener('click', async () => {
+  if (await copyText(editUrl)) toast('Link de edición copiado');
+});
+
+for (const btn of document.querySelectorAll('#edit-mode [data-mode]')) {
+  btn.addEventListener('click', () => {
+    editMode = btn.dataset.mode;
+    for (const b of document.querySelectorAll('#edit-mode [data-mode]')) {
+      b.setAttribute('aria-checked', String(b === btn));
+    }
+  });
+}
 
 $('#again').addEventListener('click', () => {
   $('#result').hidden = true;
