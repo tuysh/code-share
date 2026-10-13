@@ -22,5 +22,6 @@ export function loadConfig(env = process.env) {
     editsPerHour: int(env.EDITS_PER_HOUR, 600),
     sweepIntervalMs: int(env.SWEEP_INTERVAL_SECONDS, 60) * 1000,
     trustProxy: env.TRUST_PROXY === 'true' || env.TRUST_PROXY === '1',
+    production: env.NODE_ENV === 'production',
   };
 }

@@ -124,3 +124,33 @@ test('store reloads projects from disk on restart', async () => {
   await fresh.init();
   assert.ok(await fresh.get(project.id));
 });
+
+test('pages reference versioned assets that are cached immutably in production', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'code-share-assets-'));
+  const config = loadConfig({ DATA_DIR: dir, NODE_ENV: 'production' });
+  const prodStore = new Store(config);
+  await prodStore.init();
+  const prod = createApp(config, prodStore).listen(0);
+  await new Promise((r) => prod.once('listening', r));
+  const url = `http://127.0.0.1:${prod.address().port}`;
+  try {
+    const page = await fetch(url);
+    assert.equal(page.headers.get('cache-control'), 'no-cache');
+    const html = await page.text();
+    const script = /src="(\/assets\/[0-9a-f]{10}\/upload\.js)"/.exec(html)?.[1];
+    assert.ok(script, 'index.html points at a versioned script');
+    assert.ok(!/"\/assets\/(?![0-9a-f]{10}\/)/.test(html), 'no unversioned asset URLs left');
+
+    const asset = await fetch(url + script);
+    assert.equal(asset.status, 200);
+    assert.match(asset.headers.get('cache-control'), /immutable/);
+    // Relative module imports resolve under the same version prefix.
+    assert.equal((await fetch(url + script.replace('upload.js', 'common.js'))).status, 200);
+
+    const project = await (await fetch(`${url}/zzzzzz`)).text();
+    assert.match(project, /\/assets\/[0-9a-f]{10}\/project\.js/);
+  } finally {
+    prod.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

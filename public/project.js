@@ -55,7 +55,7 @@ const closed = new Set();
 /** Active editor session, or null. */
 let editing = null;
 
-for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = icons[el.dataset.icon];
+for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = icons[el.dataset.icon] ?? '';
 
 const basename = (p) => p.slice(p.lastIndexOf('/') + 1);
 const dirname = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '');

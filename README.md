@@ -120,5 +120,6 @@ curl https://share.midominio.com/aB3xYz/raw/main.py
 
 - Cada proyecto vive en `DATA_DIR/projects/<id>/` con un `meta.json` y los archivos guardados por un id interno (`files/0`, `files/1`…). Las rutas que envía el usuario solo se usan para mostrar, nunca para escribir en disco, así que no hay forma de salirse del directorio.
 - Las escrituras de un mismo proyecto se ejecutan en cola y `meta.json` se reemplaza de forma atómica, así que ediciones simultáneas no se pisan.
+- Los archivos del frontend se sirven en `/assets/<hash>/…`, donde el hash cambia con su contenido. Tras cada despliegue el navegador descarga las versiones nuevas en lugar de mezclar páginas nuevas con scripts viejos de su caché.
 - Al arrancar, el servidor lee todos los `meta.json`, borra lo que ya venció y programa el barrido periódico.
 - Los archivos se sirven como `text/plain` (o como imagen rasterizada) con `nosniff` y una CSP `sandbox`, por lo que un HTML o SVG subido nunca se ejecuta en el dominio.

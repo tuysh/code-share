@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,27 @@ import { sanitizePath, uniquePath, decodeFilename } from './paths.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VIEWS = path.join(ROOT, 'views');
+const PUBLIC = path.join(ROOT, 'public');
 const HLJS = path.join(ROOT, 'node_modules', '@highlightjs', 'cdn-assets');
+
+/** Short hash of every front-end file, so each deploy gets fresh asset URLs. */
+function assetVersion() {
+  const hash = crypto.createHash('sha256');
+  for (const name of readdirSync(PUBLIC).sort()) {
+    hash.update(name).update(readFileSync(path.join(PUBLIC, name)));
+  }
+  return hash.digest('hex').slice(0, 10);
+}
+
+/**
+ * Pages point at /assets/<version>/…. Module imports like `./common.js` resolve
+ * relative to that URL, so a browser can never pair a new page with a cached old
+ * script (which broke pages right after a deploy).
+ */
+function loadPages(version) {
+  const render = (file) => readFileSync(path.join(VIEWS, file), 'utf8').replaceAll('"/assets/', `"/assets/${version}/`);
+  return { index: render('index.html'), project: render('project.html') };
+}
 
 // Raster images are safe to render inline; SVG is not (it can carry scripts).
 const IMAGE_TYPES = {
@@ -107,10 +127,20 @@ export function createApp(config, store) {
 
   app.get('/healthz', (req, res) => res.json({ ok: true }));
 
-  app.use('/assets', express.static(path.join(ROOT, 'public'), { maxAge: '1h' }));
+  const version = assetVersion();
+  const pages = loadPages(version);
+  const sendPage = (res, name, status = 200) =>
+    res.status(status).type('html').set('Cache-Control', 'no-cache').send(pages[name]);
+
+  // Versioned URLs never change content, so they can be cached for good in production.
+  // In development files change without a restart, so always revalidate.
+  const versioned = config.production ? { immutable: true, maxAge: '1y' } : { maxAge: 0 };
+  app.use(`/assets/${version}`, express.static(PUBLIC, versioned));
+  // Unversioned paths remain for tabs opened before a deploy; never cache them.
+  app.use('/assets', express.static(PUBLIC, { maxAge: 0 }));
   app.use('/vendor/hljs', express.static(HLJS, { maxAge: '7d' }));
-  app.get('/favicon.svg', (req, res) => res.sendFile(path.join(ROOT, 'public', 'favicon.svg')));
-  app.get('/', (req, res) => res.sendFile(path.join(VIEWS, 'index.html')));
+  app.get('/favicon.svg', (req, res) => res.sendFile(path.join(PUBLIC, 'favicon.svg')));
+  app.get('/', (req, res) => sendPage(res, 'index'));
 
   app.get('/api/config', (req, res) => {
     res.json({
@@ -370,7 +400,7 @@ export function createApp(config, store) {
     if (!ID_RE.test(req.params.id)) return next();
     try {
       const exists = Boolean(await store.get(req.params.id));
-      res.status(exists ? 200 : 404).sendFile(path.join(VIEWS, 'project.html'));
+      sendPage(res, 'project', exists ? 200 : 404);
     } catch (err) {
       next(err);
     }
@@ -391,7 +421,7 @@ export function createApp(config, store) {
     if (status >= 500) console.error(err);
     const message = status >= 500 ? 'Error interno del servidor.' : err.message;
     if (req.path.startsWith('/api/')) return res.status(status).json({ error: message });
-    if (status === 404) return res.status(404).sendFile(path.join(VIEWS, 'project.html'));
+    if (status === 404) return sendPage(res, 'project', 404);
     res.status(status).type('text/plain').send(message);
   });
 

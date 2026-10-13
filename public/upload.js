@@ -11,7 +11,7 @@ let staged = [];
 let busy = false;
 let editMode = 'owner';
 
-for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = icons[el.dataset.icon];
+for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = icons[el.dataset.icon] ?? '';
 
 fetch('/api/config')
   .then((r) => r.json())
