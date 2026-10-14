@@ -6,7 +6,7 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { Store } from '../src/store.js';
 import { createApp } from '../src/app.js';
-import { sanitizePath, uniquePath } from '../src/paths.js';
+import { sanitizePath, uniquePath, PathSet, zipNames } from '../src/paths.js';
 
 let dataDir, store, server, base;
 
@@ -79,7 +79,7 @@ test('paths are sanitized and deduplicated', async () => {
 
   assert.equal(sanitizePath('..\\..\\win\\x.c', 'f'), 'win/x.c');
   assert.equal(sanitizePath('../..', 'fallback'), 'fallback');
-  assert.equal(uniquePath('a.js', new Set(['a.js', 'a (2).js'])), 'a (3).js');
+  assert.equal(uniquePath('a.js', new PathSet(['a.js', 'a (2).js'])), 'a (3).js');
 });
 
 test('rejects empty and oversized uploads', async () => {

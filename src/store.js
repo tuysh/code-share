@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { HttpError } from './errors.js';
-import { uniquePath } from './paths.js';
+import { PathSet, uniquePath } from './paths.js';
 
 // No look-alike characters (0/O, 1/l/I) so links are easy to read aloud.
 const ALPHABET = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -59,15 +59,33 @@ export class Store {
     await fs.mkdir(this.projectsDir, { recursive: true });
 
     for (const id of await fs.readdir(this.projectsDir)) {
+      let meta;
       try {
-        const meta = JSON.parse(await fs.readFile(this.metaPath(id), 'utf8'));
-        this.index.set(id, meta.expiresAt);
-      } catch {
-        // Half-written or corrupt project: nothing can be served from it.
-        await fs.rm(this.projectDir(id), { recursive: true, force: true });
+        meta = normalize(JSON.parse(await fs.readFile(this.metaPath(id), 'utf8')));
+      } catch (err) {
+        if (err.code === 'ENOENT' || err instanceof SyntaxError) {
+          // Half-written or corrupt project: nothing can be served from it.
+          await fs.rm(this.projectDir(id), { recursive: true, force: true });
+        } else {
+          // A transient I/O error must not destroy a valid project; retry on next start.
+          console.error(`could not read project ${id}:`, err);
+        }
+        continue;
       }
+      this.index.set(id, meta.expiresAt);
+      await this.prune(meta);
     }
     await this.sweep();
+  }
+
+  /** Removes files a crash left behind: temp files and files no longer listed in meta. */
+  async prune(meta) {
+    const keep = new Set(meta.files.map((f) => f.id));
+    await fs.rm(path.join(this.projectDir(meta.id), 'meta.json.tmp'), { force: true });
+    const dir = path.join(this.projectDir(meta.id), 'files');
+    for (const name of await fs.readdir(dir).catch(() => [])) {
+      if (!keep.has(name)) await fs.rm(path.join(dir, name), { force: true });
+    }
   }
 
   projectDir(id) {
@@ -109,7 +127,7 @@ export class Store {
 
   /** Moves uploaded temp files into the project and appends them to `meta.files`. */
   async ingest(meta, files) {
-    const taken = new Set(meta.files.map((f) => f.path));
+    const taken = new PathSet(meta.files.map((f) => f.path));
     const now = Date.now();
     for (const file of files) {
       const fileId = String(meta.nextFileId++);
@@ -188,14 +206,25 @@ export class Store {
     return meta.editMode === 'anyone' || this.isOwner(meta, token);
   }
 
-  /** Runs `fn(meta)` under the project lock, then persists meta with a bumped revision. */
-  mutate(id, fn) {
+  /**
+   * Runs `fn(meta, afterCommit)` under the project lock, then persists meta with a
+   * bumped revision. With `token`, edit permission is checked again here, against
+   * the meta read under the lock: a request authorized when it arrived must not
+   * land after the owner locked the project while its body was still uploading.
+   * `afterCommit(cb)` queues work that must only happen once meta is saved.
+   */
+  mutate(id, fn, { token } = {}) {
     return this.withLock(id, async () => {
       const meta = await this.get(id);
       if (!meta) throw new HttpError(404, 'Este proyecto no existe o ya expiró.');
-      const result = await fn(meta);
+      if (token !== undefined && !this.canEdit(meta, token)) {
+        throw new HttpError(403, 'No tienes permiso para editar este proyecto.');
+      }
+      const pending = [];
+      const result = await fn(meta, (cb) => pending.push(cb));
       meta.rev++;
       await this.writeMeta(meta);
+      for (const cb of pending) await cb().catch((err) => console.error('post-commit cleanup failed:', err));
       return result ?? meta;
     });
   }
@@ -206,62 +235,80 @@ export class Store {
     return file;
   }
 
-  addFiles(id, files) {
-    return this.mutate(id, async (meta) => {
-      this.checkTotals([...meta.files, ...files]);
-      const before = meta.files.length;
-      await this.ingest(meta, files);
-      return { meta, added: meta.files.slice(before) };
-    });
+  addFiles(id, files, { token } = {}) {
+    return this.mutate(
+      id,
+      async (meta) => {
+        this.checkTotals([...meta.files, ...files]);
+        const before = meta.files.length;
+        await this.ingest(meta, files);
+        return { meta, added: meta.files.slice(before) };
+      },
+      { token },
+    );
   }
 
-  /** Replaces a file's content. `baseVersion` (optional) guards against overwriting someone else's save. */
-  updateFile(id, fileId, content, baseVersion) {
-    return this.mutate(id, async (meta) => {
-      const file = this.findFile(meta, fileId);
-      if (baseVersion !== undefined && baseVersion !== file.version) {
-        throw new HttpError(409, 'Otra persona guardó cambios en este archivo mientras lo editabas.');
-      }
-      if (content.length > this.limits.maxFileSize) {
-        throw new HttpError(413, `Cada archivo puede pesar como máximo ${mb(this.limits.maxFileSize)}.`);
-      }
-      const others = meta.files.filter((f) => f !== file);
-      this.checkTotals([...others, { size: content.length }]);
+  /**
+   * Replaces a file's content with the temp file `upload` ({ tmpPath, size }).
+   * `baseVersion` (optional) guards against overwriting someone else's save.
+   */
+  updateFile(id, fileId, upload, { baseVersion, token } = {}) {
+    return this.mutate(
+      id,
+      async (meta) => {
+        const file = this.findFile(meta, fileId);
+        if (baseVersion !== undefined && baseVersion !== file.version) {
+          throw new HttpError(409, 'Otra persona guardó cambios en este archivo mientras lo editabas.');
+        }
+        if (upload.size > this.limits.maxFileSize) {
+          throw new HttpError(413, `Cada archivo puede pesar como máximo ${mb(this.limits.maxFileSize)}.`);
+        }
+        const others = meta.files.filter((f) => f !== file);
+        this.checkTotals([...others, { size: upload.size }]);
 
-      const dest = this.filePath(id, fileId);
-      const tmp = `${dest}.tmp`;
-      await fs.writeFile(tmp, content);
-      await fs.rename(tmp, dest);
-      file.size = content.length;
-      file.binary = content.subarray(0, 8000).includes(0);
-      file.version++;
-      file.updatedAt = Date.now();
-      return { meta, file };
-    });
+        file.binary = await isBinary(upload.tmpPath);
+        await fs.rename(upload.tmpPath, this.filePath(id, fileId));
+        file.size = upload.size;
+        file.version++;
+        file.updatedAt = Date.now();
+        return { meta, file };
+      },
+      { token },
+    );
   }
 
-  renameFile(id, fileId, newPath) {
-    return this.mutate(id, async (meta) => {
-      const file = this.findFile(meta, fileId);
-      if (meta.files.some((f) => f !== file && f.path === newPath)) {
-        throw new HttpError(409, 'Ya existe un archivo con ese nombre.');
-      }
-      file.path = newPath;
-      file.updatedAt = Date.now();
-      return { meta, file };
-    });
+  renameFile(id, fileId, newPath, { token } = {}) {
+    return this.mutate(
+      id,
+      async (meta) => {
+        const file = this.findFile(meta, fileId);
+        const others = new PathSet(meta.files.filter((f) => f !== file).map((f) => f.path));
+        if (!others.free(newPath)) {
+          throw new HttpError(409, 'Ya existe un archivo o una carpeta con ese nombre.');
+        }
+        file.path = newPath;
+        file.updatedAt = Date.now();
+        return { meta, file };
+      },
+      { token },
+    );
   }
 
-  deleteFile(id, fileId) {
-    return this.mutate(id, async (meta) => {
-      const file = this.findFile(meta, fileId);
-      if (meta.files.length === 1) {
-        throw new HttpError(400, 'Un proyecto necesita al menos un archivo. Elimina el proyecto completo en su lugar.');
-      }
-      meta.files = meta.files.filter((f) => f !== file);
-      await fs.rm(this.filePath(id, fileId), { force: true });
-      return meta;
-    });
+  deleteFile(id, fileId, { token } = {}) {
+    return this.mutate(
+      id,
+      async (meta, afterCommit) => {
+        const file = this.findFile(meta, fileId);
+        if (meta.files.length === 1) {
+          throw new HttpError(400, 'Un proyecto necesita al menos un archivo. Elimina el proyecto completo en su lugar.');
+        }
+        meta.files = meta.files.filter((f) => f !== file);
+        // Only once meta no longer lists it; a crash in between leaves an orphan, not a dangling entry.
+        afterCommit(() => fs.rm(this.filePath(id, fileId), { force: true }));
+        return meta;
+      },
+      { token },
+    );
   }
 
   setEditMode(id, editMode) {

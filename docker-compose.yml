@@ -5,11 +5,13 @@ services:
     container_name: code-share
     restart: unless-stopped
     ports:
-      - "${PORT:-3000}:3000"
+      # Detrás de un proxy inverso usa BIND=127.0.0.1 para que nadie llegue a la app sin pasar por él.
+      - "${BIND:-0.0.0.0}:${PORT:-3000}:3000"
     environment:
       # URL pública (sin "/" final). Si se deja vacía se usa el host de la petición.
       PUBLIC_URL: ${PUBLIC_URL:-}
-      # Ponlo en "true" si corre detrás de un proxy inverso (nginx, Caddy, Traefik…).
+      # Número de proxies inversos delante de la app: 1 para nginx/Caddy/Traefik,
+      # 2 para Cloudflare → nginx. También acepta direcciones o subredes del proxy.
       TRUST_PROXY: ${TRUST_PROXY:-false}
       TTL_HOURS: ${TTL_HOURS:-24}
       MAX_FILES: ${MAX_FILES:-100}
